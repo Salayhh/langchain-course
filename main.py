@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
+from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
 
@@ -36,9 +37,15 @@ Musk's political activities, views, and statements have made him a polarizing fi
                      model="kimi-k2.5")
     chain = summary_prompt_template | llm
 
+    print("stream output:")
     for chunk in chain.stream(input={"information": information}):
         print(chunk.content, end="", flush=True)
     print()
 
+    print("-"*30)
+    print("output_parsers:")
+    chain_1 = summary_prompt_template | llm | StrOutputParser()
+    for text in chain_1.stream({"information": information}):
+        print(text, end="", flush=True)
 if __name__ == "__main__":
     main()
