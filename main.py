@@ -1,3 +1,4 @@
+import os
 from dotenv import load_dotenv
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
@@ -30,12 +31,14 @@ Musk's political activities, views, and statements have made him a polarizing fi
         input_variables=["information"], template=summary_template
     )
 
-    # llm = ChatOllama(temperature=0, model="gemma3:270m")
-    llm = ChatOpenAI(temperature=0, model="gpt-5")
+    llm = ChatOpenAI(api_key=os.getenv("MOONSHOT_API_KEY"),
+                     base_url="https://api.moonshot.cn/v1",
+                     model="kimi-k2.5")
     chain = summary_prompt_template | llm
 
-    response = chain.invoke(input={"information": information})
-    print(response.content)
+    for chunk in chain.stream(input={"information": information}):
+        print(chunk.content, end="", flush=True)
+    print()
 
 if __name__ == "__main__":
     main()
