@@ -1,3 +1,5 @@
+import os
+
 from typing import List
 
 from pydantic import BaseModel, Field
@@ -26,7 +28,10 @@ class AgentResponse(BaseModel):
     )
 
 
-llm = ChatOpenAI(model="gpt-5")
+llm = ChatOpenAI(base_url="https://api.moonshot.cn/v1",
+                 api_key=os.getenv('MOONSHOT_API_KEY'),
+                 model="kimi-k2.5",
+                 extra_body={"thinking": {"type": "disabled"}})
 tools = [TavilySearch()]
 agent = create_agent(model=llm, tools=tools, response_format=AgentResponse)
 
@@ -36,7 +41,7 @@ def main():
     result = agent.invoke(
         {
             "messages": HumanMessage(
-                content="search for 3 job postings for an ai engineer using langchain in the bay area on linkedin and list their details?"
+                content="搜索美伊战争最新动态"
             )
         }
     )
