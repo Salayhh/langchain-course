@@ -2,6 +2,167 @@
 
 This branch (`project/search-agent`) demonstrates how to build search agents using LangChain's `create_agent` interface. The tutorial progresses through three key concepts, showing how to evolve from a basic custom tool implementation to using structured outputs with built-in LangChain integrations.
 
+---
+
+## 代码逐行解释（面向初学者）
+
+如果你刚接触 LangChain，下面是对 [main.py](main.py) 每一部分的详细拆解。
+
+### 1. 导入依赖
+
+```python
+import os
+from typing import List
+from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+```
+
+- `os`：用来读取环境变量（比如 API Key）。
+- `typing.List`：类型提示，表示一个列表。
+- `pydantic.BaseModel` / `Field`：用来定义**结构化数据模型**。你可以把它理解为 Python 版的 JSON Schema，告诉程序"数据应该长什么样"。
+- `dotenv.load_dotenv`：自动加载项目根目录下 `.env` 文件里的环境变量，避免把密钥硬编码在代码里。
+
+```python
+from langchain.agents import create_agent
+from langchain.tools import tool
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
+from langchain_tavily import TavilySearch
+```
+
+这是 LangChain 生态的核心模块：
+- `create_agent`：LangChain 封装好的"创建智能体"函数，几行代码就能搭一个 Agent。
+- `tool`：装饰器，用来把普通 Python 函数变成 Agent 可以调用的"工具"。
+- `HumanMessage`：代表**用户输入的消息**。LangChain 用消息列表来管理对话历史。
+- `ChatOpenAI`：用来连接 OpenAI 风格 API 的大语言模型。这里我们连接的是 **Moonshot（Kimi）** 的 API。
+- `TavilySearch`：LangChain 官方封装的 **Tavily 搜索引擎** 工具，让 Agent 能联网查资料。
+
+---
+
+### 2. 定义结构化输出模型
+
+```python
+class Source(BaseModel):
+    """Schema for a source used by the agent"""
+    url: str = Field(description="The URL of the source")
+```
+
+- 定义了一个 `Source` 类，表示"一个信息来源"。
+- `BaseModel` 是 Pydantic 的基类，它会自动帮你做**类型校验**。
+- `Field(description=...)`：给字段加一段人类可读的描述。这段描述**会被送给大模型看**，让模型知道这里该填什么。
+
+```python
+class AgentResponse(BaseModel):
+    """Schema for agent response with answer and sources"""
+    answer: str = Field(description="The agent's answer to the query")
+    sources: List[Source] = Field(
+        default_factory=list, description="List of sources used to generate the answer"
+    )
+```
+
+- 这是最终输出的"模板"。我们告诉 Agent：你回答问题时，必须按这个格式交卷——
+  - `answer`：你的文字回答
+  - `sources`：你用了哪些来源，每个来源给一个 URL
+- `default_factory=list`：如果没有来源，默认给一个空列表，而不是报错。
+
+> **为什么要结构化输出？**  如果不加约束，模型可能随便吐一段文字，来源混在正文里，程序很难提取。有了 Pydantic 模型，输出就是标准的 Python 对象，可以直接用代码处理。
+
+---
+
+### 3. 初始化大语言模型（LLM）
+
+```python
+llm = ChatOpenAI(
+    base_url="https://api.moonshot.cn/v1",
+    api_key=os.getenv('MOONSHOT_API_KEY'),
+    model="kimi-k2.5",
+    extra_body={"thinking": {"type": "disabled"}}
+)
+```
+
+- `base_url`：指向 Moonshot（Kimi）的 API 地址，而不是默认的 OpenAI 官方地址。
+- `api_key`：从环境变量读取密钥，安全又方便。
+- `model`：指定使用 `kimi-k2.5` 模型。
+- `extra_body={"thinking": {"type": "disabled"}}`：这是一个**兼容性修复**。Kimi K2.5 默认会开启"深度思考"模式，但 LangChain 的 `response_format` 会强制要求模型**立刻输出 JSON**，两者冲突会导致 400 错误。关闭 thinking 后，模型就能乖乖按格式输出。
+
+> 关于这个 Bug 的详细原理，见下方 [fix kimi toolcalling bug](#fix-kimi-toolcalling-bug) 章节。
+
+---
+
+### 4. 创建工具和智能体
+
+```python
+tools = [TavilySearch()]
+agent = create_agent(model=llm, tools=tools, response_format=AgentResponse)
+```
+
+- `tools = [TavilySearch()]`：给 Agent 配一个"工具箱"，目前只有一个工具——Tavily 搜索引擎。
+- `create_agent(...)`：LangChain 的核心魔法，三行代码搭好一个 Agent：
+  - `model=llm`：指定大脑（Kimi）
+  - `tools=tools`：指定手脚（搜索引擎）
+  - `response_format=AgentResponse`：指定输出的格式（用我们定义的 Pydantic 模型）
+
+> **Agent 的工作逻辑**：你问一个问题 → Agent 判断需不需要搜索 → 如果需要，调用 TavilySearch → 拿到结果后，Kimi 整理答案 → 最终按 `AgentResponse` 格式输出。
+
+---
+
+### 5. 主函数：运行 Agent
+
+```python
+def main():
+    print("Hello from langchain-course!")
+    result = agent.invoke({
+        "messages": HumanMessage(content="搜索美伊战争最新动态")
+    })
+    print(result)
+```
+
+- `agent.invoke(...)`：**同步调用** Agent。传入一个字典，其中 `messages` 是一个 `HumanMessage` 对象，代表用户的问题。
+- Agent 收到问题后，会自动决定要不要搜索、搜索什么关键词、怎么整理答案。
+- 最终返回的 `result` 是一个字典，里面包含了完整的对话历史、工具调用记录和最终的 `structured_response`。
+
+```python
+if __name__ == "__main__":
+    main()
+```
+
+- Python 的标准入口写法。直接运行 `python main.py` 时，会执行 `main()` 函数。
+
+---
+
+### 6. 整体流程图
+
+```
+用户提问 (HumanMessage)
+       │
+       ▼
+┌──────────────┐
+│   Agent      │ ← create_agent 创建的调度器
+│ (Kimi 大脑)  │
+└──────┬───────┘
+       │ 发现需要搜索
+       ▼
+┌──────────────┐
+│ TavilySearch │ ← 联网搜索最新资讯
+│   (工具)     │
+└──────┬───────┘
+       │ 返回搜索结果
+       ▼
+┌──────────────┐
+│   Agent      │ ← 整理、总结、引用来源
+│ (Kimi 大脑)  │
+└──────┬───────┘
+       │ 按 AgentResponse 格式输出
+       ▼
+┌──────────────────────────┐
+│  AgentResponse           │
+│  ├── answer: str         │
+│  └── sources: [Source]   │
+└──────────────────────────┘
+```
+
+---
+
 ## Learning Objectives
 
 - Understand the LangChain `create_agent` interface
